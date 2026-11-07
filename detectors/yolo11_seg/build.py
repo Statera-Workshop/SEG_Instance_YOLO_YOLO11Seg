@@ -144,8 +144,10 @@ class YOLO11Seg(YOLO11):
             idx = gt_idx[fg]
             gt_m = F.interpolate(t["masks"][None].float(), (mh, mw), mode="nearest")[0][idx]   # [n, mh, mw]
             box = t["boxes"][idx]                                            # input px, xyxy
-            mxyxy = box * torch.tensor([mw / img_size, mh / img_size] * 2, device=box.device)
-            marea = ((box[:, 2] - box[:, 0]) * (box[:, 3] - box[:, 1]) / img_size ** 2).clamp(min=1e-9)
+            # [Unified] vseg02: canvas H x W from the target masks (wide 1216 x 384); square: H = W = img_size
+            H, W = t["masks"].shape[-2:]
+            mxyxy = box * torch.tensor([mw / W, mh / H] * 2, device=box.device)
+            marea = ((box[:, 2] - box[:, 0]) * (box[:, 3] - box[:, 1]) / (W * H)).clamp(min=1e-9)
             pred = (coef[i, fg] @ proto[i].view(nm, -1)).view(-1, mh, mw)
             loss = F.binary_cross_entropy_with_logits(pred, gt_m, reduction="none")
             total = total + (crop_mask(loss, mxyxy).mean(dim=(1, 2)) / marea).sum()

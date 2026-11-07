@@ -37,6 +37,8 @@ https://www.nist.gov/itl/products-and-services/emnist-dataset and run
 
 ## Results
 
+> **v1.1 (2026-11-08)** - KITTI-MOTS instance results added (section below, video-segmentation stage of the series) with their weights in Release v1.1. The FL36-Seg results, defaults and Release v1.0 are unchanged.
+
 Test set: FL36-Seg test (1,024 images, 6,699 objects, 36 classes), after 30 epochs (0.5 h on an RTX 4070 Laptop GPU).
 
 | | AP50 | AP75 | **AP50:95** | Recall (IoU 0.5) |
@@ -57,6 +59,57 @@ Convergence (test AP50 every 5 epochs):
 Protocol: 30 epochs, Adam lr 1e-4 (constant), effective batch 8 (micro batch 2 x 4 accumulation), input 608, seed 777,
 no pretraining; augmentation: horizontal flip + the basic YOLO-paper augmentation (random scale / translation 20 %,
 HSV hue 0.1, saturation / exposure 1.5); test evaluation every 5 epochs.
+
+## KITTI-MOTS (v1.1, video-segmentation stage)
+
+`yolo11_seg_km`: the same YOLO11-seg, started from the MOT-stage `v11` detector (KITTI-MOTS train, 30 epochs, 1216 x 384) so
+only the mask branch is new; trained on the KITTI-MOTS instance masks (car, pedestrian), wide canvas 1216 x 384, Adam
+1e-4, seed 777. The fine-tuning length (8 epochs) was chosen on held-out TRAIN sequences (0004, 0015), never on val. Test = KITTI-MOTS val (9 sequences, 2,981 frames). Protocol difference to the FL36-Seg result
+above: detector initialisation instead of training from scratch.
+
+The three instance models of the stage:
+
+| model | epochs | box AP50 | mask AP50 | mask AP50:95 | images / s |
+| --- | --- | --- | --- | --- | --- |
+| Mask R-CNN | 6 | 0.773 | 0.712 | 0.428 | 21.1 |
+| Mask R-CNN | 20 (used by the MOTS rows below) | 0.766 | 0.727 | 0.469 | 20.6 |
+| Cascade Mask R-CNN | 20 | 0.777 | 0.743 | 0.485 | 17.5 |
+| YOLO11-seg | 8 | 0.705 | 0.639 | 0.358 | 33.8 |
+
+### MOTS on KITTI-MOTS val (TrackEval KittiMOTS, car / pedestrian mean)
+
+| method (this model's boxes) | det. epochs | mask HOTA | DetA | AssA | sMOTSA | car / ped. HOTA | STQ (FCN semantic) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Hybrid-SORT + SAM2.1-L frame masks | 8 | **0.478** | 0.412 | 0.557 | 0.401 | 0.624 / 0.332 | 0.460 |
+| BoT-SORT + own masks | 8 | **0.425** | 0.360 | 0.508 | 0.335 | 0.600 / 0.250 | 0.476 |
+| Hybrid-SORT + own masks | 8 | **0.425** | 0.361 | 0.505 | 0.334 | 0.578 / 0.271 | 0.440 |
+| ByteTrack + own masks | 8 | **0.424** | 0.373 | 0.487 | 0.345 | 0.594 / 0.254 | 0.443 |
+| OC-SORT + own masks | 8 | **0.360** | 0.290 | 0.460 | 0.283 | 0.556 / 0.164 | 0.427 |
+
+- own masks = the masks of this model on the tracked boxes; SAM2 frame masks = SAM2.1-large prompted per frame with the
+  same tracked boxes (no memory). Seg2Track-SAM2 = tracking by segmentation with this model's detections.
+
+Usage: KITTI images and KITTI-STEP as below, KITTI-MOTS instance PNGs from KITTI-STEP, VOC layout of the MOT stage,
+then training from the MOT detector weights (Release v1.0 of `Statera-Workshop/MOT_Detectors_KITTIMOTS`):
+
+```bash
+mkdir -p ~/Physical_AI/datasets/downloads && cd ~/Physical_AI/datasets/downloads
+wget -c https://s3.eu-central-1.amazonaws.com/avg-kitti/data_tracking_image_2.zip     # KITTI tracking images
+wget -c http://storage.googleapis.com/gresearch/tf-deeplab/data/kitti-step.tar.gz      # KITTI-STEP labels
+unzip -q data_tracking_image_2.zip 'training/image_02/*' -d ~/Physical_AI/datasets/KITTI_MOTS
+tar -xzf kitti-step.tar.gz -C ~/Physical_AI/datasets/                                  # -> datasets/kitti-step
+```
+
+```bash
+python tools/mot/step_to_mots_png.py          # -> datasets/KITTI_MOTS/instances (KITTI-MOTS encoding)
+python tools/mot/kittimots_to_voc.py          # -> datasets/KITTI_MOTS_VOC (boxes, ignore regions, splits)
+export UNIFIED_SEG_DATASET=kittimots UNIFIED_IMAGE_H=384
+UNIFIED_INIT_CKPT=image_v11_kittimots_e030.pth python train_seg_yolo11_seg_km.py --epochs 8
+python evaluate_seg_yolo11_seg_km.py --weights seg_yolo11_seg_km_kittimots_e008.pth
+```
+
+Weights: Release v1.1 (`seg_yolo11_seg_km_kittimots_e008.pth`).
+KITTI / KITTI-MOTS / KITTI-STEP are CC BY-NC-SA 3.0 (non-commercial); the weights inherit it.
 
 ## Usage
 

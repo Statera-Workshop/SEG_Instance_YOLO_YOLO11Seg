@@ -52,12 +52,24 @@ class SegTask:
         self.class_names = list(self.spec["classes"])
 
     # ------------------------------------------------------------ data
+    def _kitti(self, args, split, train):
+        # [Unified] vseg02 (2026-10-31): KITTI-MOTS instance masks on the wide canvas (common/seg/kitti_mots.py)
+        from common.seg.kitti_mots import KittiMotsInstSeg
+        return KittiMotsInstSeg(C.SEG_ROOT, split, args.img_size, self.class_names, train=train,
+                                hflip_prob=C.PROFILE["hflip_prob"] if train else 0.0,
+                                max_samples=args.max_train if train else args.max_test,
+                                aug=C.PROFILE["image_aug"] if train else None)
+
     def train_set(self, args):
+        if self.spec["dataset"] == "kittimots":
+            return self._kitti(args, self.spec["train_split"], True)
         return VOCInstanceSeg(C.SEG_ROOT, self.spec["train_split"], args.img_size, self.class_names, train=True,
                               hflip_prob=C.PROFILE["hflip_prob"], max_samples=args.max_train,
                               aug=C.PROFILE["image_aug"])
 
     def test_set(self, args):
+        if self.spec["dataset"] == "kittimots":
+            return self._kitti(args, self.spec["test_split"], False)
         return VOCInstanceSeg(C.SEG_ROOT, self.spec["test_split"], args.img_size, self.class_names, train=False,
                               max_samples=args.max_test)
 

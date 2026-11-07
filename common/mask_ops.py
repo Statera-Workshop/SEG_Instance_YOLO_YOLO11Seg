@@ -83,7 +83,7 @@ def full_mask_to_original(prob, img_size, w, h, letterbox_params, thr, box=None)
     -> CropMask in original pixels. If `box` (original px) is given, pixels outside it are cleared
     (YOLACT / YOLO-seg crop the assembled mask with the predicted box)."""
     scale, px, py, rw, rh = letterbox_params(w, h, img_size)
-    r = prob.shape[0] / float(img_size)
+    r = prob.shape[1] / float(img_size)    # [Unified] vseg02: width-based (wide canvas); square: same as before
     sub = prob[int(round(py * r)):int(round((py + rh) * r)), int(round(px * r)):int(round((px + rw) * r))]
     full = cv2.resize(sub.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR) >= thr
     if box is not None:

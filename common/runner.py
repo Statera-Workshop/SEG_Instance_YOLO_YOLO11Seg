@@ -8,6 +8,7 @@ Each entry script is three lines: it only names the task, the version and the
 model builder. Arguments, paths, logs and outputs are therefore identical.
 """
 
+import os
 import argparse
 from pathlib import Path
 
@@ -82,6 +83,11 @@ def main(mode, task, version, build_model):
 
     if mode == "train":
         model.apply(weights_init_normal)
+        if hasattr(model, "load_imagenet"):    # [Unified] vseg01: ImageNet backbone (semseg *_in), after common init
+            print(f"Pretrained   : {model.load_imagenet()}")
+        if getattr(model, "init_detector", None):  # [Unified] vseg02: seg *_km start from the MOT-stage detector
+            from common.seg.init_from_det import load_detector_init
+            print(f"Init from    : {load_detector_init(model)}")
         if args.pretrained:
             model.load_darknet_weights(args.pretrained)
             print(f"Pretrained   : {args.pretrained}")
@@ -93,7 +99,8 @@ def main(mode, task, version, build_model):
         if ckpt.exists() and not args.overwrite:
             raise FileExistsError(f"{ckpt} exists (use --overwrite).")
         train_set = t.train_set(args)
-        meta = {"task": task, "version": version, "img_size": args.img_size, "classes": t.class_names,
+        meta = {"task": task, "version": version, "img_size": args.img_size,
+                "img_h": int(os.environ.get("UNIFIED_IMAGE_H") or args.img_size), "classes": t.class_names,
                 "recipe": recipe, "seed": args.seed, "dataset": C.TASKS[task]["dataset"]}
 
         eval_curve = []                       # [Unified] optional convergence curve (--eval-interval)

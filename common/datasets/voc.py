@@ -18,6 +18,7 @@ not used. Boxes follow the same affine transform; boxes left with less than 25 %
 (or narrower than 2 px) after clipping are dropped.
 """
 
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -28,17 +29,26 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 
-def letterbox_params(w, h, size):
-    scale = min(size / w, size / h)
+# [Unified] MOT stage (2026-10-22): optional wide canvas. UNIFIED_IMAGE_H=384 with --img-size 1216 letterboxes into
+# 1216 x 384 (W x H). Targets are then normalised by the canvas HEIGHT on both axes (cx, w may exceed 1), because
+# the detectors turn targets back into pixels with split_targets(targets, B, x.shape[2]) = x input height.
+# Unset (default) -> square canvas, identical to before.
+CANVAS_H = int(os.environ["UNIFIED_IMAGE_H"]) if os.environ.get("UNIFIED_IMAGE_H") else None
+
+
+def letterbox_params(w, h, size, size_h=None):
+    sh = size_h or CANVAS_H or size
+    scale = min(size / w, sh / h)
     rw, rh = int(round(w * scale)), int(round(h * scale))
-    return scale, (size - rw) // 2, (size - rh) // 2, rw, rh
+    return scale, (size - rw) // 2, (sh - rh) // 2, rw, rh
 
 
-def letterbox(image, size):
+def letterbox(image, size, size_h=None):
     """PIL RGB -> (letterboxed PIL, scale, pad_x, pad_y). Gray (128) padding, legacy."""
     w, h = image.size
-    scale, px, py, rw, rh = letterbox_params(w, h, size)
-    canvas = Image.new("RGB", (size, size), (128, 128, 128))
+    sh = size_h or CANVAS_H or size
+    scale, px, py, rw, rh = letterbox_params(w, h, size, sh)
+    canvas = Image.new("RGB", (size, sh), (128, 128, 128))
     canvas.paste(image.resize((rw, rh), Image.BILINEAR), (px, py))
     return canvas, scale, px, py
 
@@ -60,19 +70,20 @@ def hsv_jitter(arr, hue, saturation, exposure):
 
 def random_scale_translate(arr, boxes, jitter, fill=128):
     """Scale about the centre by [1 - jitter, 1 + jitter] and shift by up to jitter * size."""
-    size = arr.shape[0]
+    H, W = arr.shape[:2]                                  # square: H == W, same draws and result as before
     sc = np.random.uniform(1.0 - jitter, 1.0 + jitter)
-    tx, ty = np.random.uniform(-jitter, jitter, 2) * size
-    c = (1.0 - sc) * size / 2.0
-    m = np.array([[sc, 0, c + tx], [0, sc, c + ty]], dtype=np.float32)
-    out = cv2.warpAffine(arr, m, (size, size), flags=cv2.INTER_LINEAR, borderValue=(fill, fill, fill))
+    tx, ty = np.random.uniform(-jitter, jitter, 2) * np.array([W, H])
+    cx, cy = (1.0 - sc) * W / 2.0, (1.0 - sc) * H / 2.0
+    m = np.array([[sc, 0, cx + tx], [0, sc, cy + ty]], dtype=np.float32)
+    out = cv2.warpAffine(arr, m, (W, H), flags=cv2.INTER_LINEAR, borderValue=(fill, fill, fill))
     if len(boxes) == 0:
         return out, boxes, np.zeros(0, bool)
     b = boxes.copy()
-    b[:, [0, 2]] = b[:, [0, 2]] * sc + c + tx
-    b[:, [1, 3]] = b[:, [1, 3]] * sc + c + ty
+    b[:, [0, 2]] = b[:, [0, 2]] * sc + cx + tx
+    b[:, [1, 3]] = b[:, [1, 3]] * sc + cy + ty
     area0 = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
-    b = np.clip(b, 0, size)
+    b[:, [0, 2]] = np.clip(b[:, [0, 2]], 0, W)
+    b[:, [1, 3]] = np.clip(b[:, [1, 3]], 0, H)
     area1 = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
     keep = (b[:, 2] - b[:, 0] > 2) & (b[:, 3] - b[:, 1] > 2) & (area1 >= 0.25 * np.maximum(area0, 1e-6))
     return out, b, keep
@@ -140,7 +151,8 @@ class VOCDetection(Dataset):
         boxes, labels = ann["boxes"][keep], ann["labels"][keep]
 
         image, scale, px, py = letterbox(image, self.img_size)
-        s = float(self.img_size)
+        s = float(image.size[1])                          # canvas height (= img_size when square)
+        xmax = image.size[0] / s                          # 1.0 when square
         b = boxes * scale
         if len(b):
             b[:, [0, 2]] += px
@@ -157,12 +169,13 @@ class VOCDetection(Dataset):
             targets[:, 3] = torch.from_numpy((b[:, 1] + b[:, 3]) / 2 / s)
             targets[:, 4] = torch.from_numpy((b[:, 2] - b[:, 0]) / s)
             targets[:, 5] = torch.from_numpy((b[:, 3] - b[:, 1]) / s)
-            targets[:, 2:6] = targets[:, 2:6].clamp(0.0, 1.0)
+            targets[:, [2, 4]] = targets[:, [2, 4]].clamp(0.0, xmax)
+            targets[:, [3, 5]] = targets[:, [3, 5]].clamp(0.0, 1.0)
 
         img = to_tensor(image)
         if self.hflip_prob and np.random.random() < self.hflip_prob:
             img = torch.flip(img, [-1])
-            targets[:, 2] = 1.0 - targets[:, 2]
+            targets[:, 2] = xmax - targets[:, 2]
         return i, img, targets
 
     @staticmethod

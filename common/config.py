@@ -58,13 +58,16 @@ REFERENCE_RECIPE = {
 # FashionLetters36 classes: Fashion-MNIST 10 + EMNIST letters 26 (FL36-Seg uses the same 36 classes)
 FL36_CLASSES = ("tshirt", "trouser", "pullover", "dress", "coat", "sandal", "shirt", "sneaker", "bag", "ankle_boot",
                 *[chr(ord("A") + i) for i in range(26)])
+# KITTI-MOTS in VOC layout (MOT stage, tools/mot/kittimots_to_voc.py): boxes for the KITTI-MOTS seg task
+KITTIMOTS_CLASSES = ("car", "pedestrian")
+KITTIMOTS_VOC_ROOT = DATASETS_ROOT / "KITTI_MOTS_VOC"
 
 
 # [Unified] Segmentation stage (2026-10-11). Instance segmentation data in VOC layout:
 #   JPEGImages/, Annotations/ (boxes, unchanged), SegmentationObject/ (instance id PNG: k = k-th XML object,
 #   0 = background, 255 = void), SegmentationClass/ (class id + 1 PNG), ImageSets/Segmentation/<split>.txt.
 # FL36-Seg (default) is FashionLetters36 regenerated with the same seed plus masks; VOC2007 is the check set
-# (422 trainval / 210 test images with masks). Select with UNIFIED_SEG_DATASET=fl36seg | voc2007.
+# (422 trainval / 210 test images with masks). Select with UNIFIED_SEG_DATASET=fl36seg | voc2007 | kittistep | kittimots.
 SEG_DATASET = os.environ.get("UNIFIED_SEG_DATASET", "fl36seg")
 FL36SEG_ROOT = DATASETS_ROOT / "FashionLetters36_Seg"
 if SEG_DATASET == "fl36seg":
@@ -74,17 +77,35 @@ elif SEG_DATASET == "voc2007":
     SEG_CLASSES = ("aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow",
                    "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train",
                    "tvmonitor")
+elif SEG_DATASET == "kittistep":
+    SEG_ROOT, SEG_CLASSES = None, None            # set below (video segmentation stage)
+elif SEG_DATASET == "kittimots":
+    # [Unified] vseg02 (2026-10-31): KITTI-MOTS instance masks for the seg task (common/seg/kitti_mots.py): boxes and
+    # ignore regions from KITTI_MOTS_VOC (MOT stage), masks from KITTI_MOTS/instances PNG, wide canvas 1216 x 384.
+    SEG_ROOT, SEG_CLASSES = KITTIMOTS_VOC_ROOT, KITTIMOTS_CLASSES
+    if os.environ.get("UNIFIED_IMAGE_H") != "384":
+        raise ValueError("UNIFIED_SEG_DATASET=kittimots needs UNIFIED_IMAGE_H=384 (wide canvas, as the MOT detectors)")
 else:
-    raise ValueError(f"UNIFIED_SEG_DATASET must be fl36seg or voc2007, not {SEG_DATASET!r}")
+    raise ValueError(f"UNIFIED_SEG_DATASET must be fl36seg, voc2007, kittistep or kittimots, not {SEG_DATASET!r}")
+
+# [Unified] Video segmentation stage (vseg01, 2026-10-31): KITTI-STEP semantic labels (19 Cityscapes trainIds,
+# void 255) on the KITTI tracking images already used by KITTI-MOTS; same 12 / 9 split (val = KITTI-MOTS val).
+# semseg only (common/seg/kitti_step.py); wide canvas 1216 x 384 like the MOT stage. UNIFIED_SEG_DATASET=kittistep.
+CITYSCAPES_CLASSES = ("road", "sidewalk", "building", "wall", "fence", "pole", "traffic_light", "traffic_sign",
+                      "vegetation", "terrain", "sky", "person", "rider", "car", "truck", "bus", "train", "motorcycle",
+                      "bicycle")
+KITTISTEP_ROOT = DATASETS_ROOT / "kitti-step"
+if SEG_DATASET == "kittistep":
+    SEG_ROOT, SEG_CLASSES = KITTISTEP_ROOT, CITYSCAPES_CLASSES
 
 TASKS = {
     "seg": {
         "dataset": SEG_DATASET,
         "classes": SEG_CLASSES,
-        "img_size": 608,
+        "img_size": 1216 if SEG_DATASET == "kittimots" else 608,     # [Unified] vseg02: wide canvas (H from env)
         "micro_batch": 2,
-        "train_split": "trainval",
-        "test_split": "test",
+        "train_split": os.environ.get("UNIFIED_SEG_TRAIN_SPLIT", "trainval"),   # [Unified] vseg05: hold-out runs
+        "test_split": os.environ.get("UNIFIED_SEG_TEST_SPLIT", "test"),
         "mask_threshold": 0.5,       # mask probability -> binary
     },
 }
